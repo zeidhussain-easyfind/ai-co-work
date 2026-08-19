@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyServiceRestarts",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "rds:StartDBInstance",
+        "rds:StartDBCluster",
+        "rds:CreateDBInstance",
+        "lambda:CreateFunction",
+        "lambda:UpdateFunctionCode"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
