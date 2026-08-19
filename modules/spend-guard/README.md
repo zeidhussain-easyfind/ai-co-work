@@ -3,44 +3,55 @@
 **Module:** spend-guard
 **Owner:** EasyFind Property Solutions
 **Status:** Active
-**Region:** ap-south-1 (Mumbai)
+**Region:** ap-south-1 (Mumbai) / us-east-1 (billing alarms only)
 
 ---
 
 ## What This Module Does
 
-spend-guard is a cost protection automation. It watches your daily AWS spend and
-automatically shuts down all running services the moment your bill crosses $5 in a single day.
+spend-guard is a cost protection automation. It watches your AWS estimated charges
+and the moment they hit $4, two things happen simultaneously:
 
-You also get an email alert at the same time so you know it happened.
+1. You get an email at zeidzakirhussain@gmail.com
+2. All running services are stopped immediately — EC2, RDS, and Lambda
 
-Think of it as a circuit breaker for your AWS bill.
+Every spend event (any amount, even $0.01) is logged to CloudWatch so there
+is a full audit trail of every dollar spent.
+
+Services stay stopped until you manually say otherwise. Nothing restarts automatically.
 
 ---
 
 ## How It Works — A to Z
 
 ```
-1. AWS Budgets monitors your daily spend continuously.
+1. CloudWatch monitors AWS/Billing EstimatedCharges continuously.
 
-2. When actual daily spend crosses $5 (100% of the $5 daily budget):
-   - AWS Budgets publishes a message to the SNS topic (efps-spend-guard-topic)
+2. On every spend event (any amount):
+   - The alarm state reason is logged to CloudWatch
+   - This gives a full audit trail of all spend
 
-3. The SNS topic does two things simultaneously:
+3. When estimated charges hit $4:
+   - CloudWatch alarm (efps-spend-guard-4usd-alert) fires
+   - Publishes to efps-spend-guard-billing-topic (us-east-1)
+
+4. The billing SNS topic does two things simultaneously:
    a. Sends an email alert to zeidzakirhussain@gmail.com
    b. Triggers the Lambda function (efps-spend-guard-fn)
 
-4. The Lambda function runs three actions in sequence:
+5. The Lambda function runs three actions in sequence:
    a. Stops all running EC2 instances
    b. Stops all available RDS instances and Aurora clusters
    c. Sets reserved concurrency to 0 on all Lambda functions (throttle to zero)
       - Skips itself so it can finish running
 
-5. In parallel, the monthly budget (efps-spend-guard-monthly-budget) has a
-   Budget Action that attaches an IAM deny policy to the Lambda role,
-   blocking EC2/RDS/Lambda from being restarted until manually removed.
+6. The daily budget (efps-spend-guard-daily-budget) also fires at $4
+   as a secondary safety net via efps-spend-guard-topic (ap-south-1).
 
-6. Everything is logged to CloudWatch under:
+7. The monthly budget (efps-spend-guard-monthly-budget) has a Budget Action
+   that attaches an IAM deny policy — blocks services from being restarted.
+
+8. Everything is logged to CloudWatch:
    /aws/lambda/efps-spend-guard-fn
 ```
 
@@ -48,96 +59,110 @@ Think of it as a circuit breaker for your AWS bill.
 
 ## AWS Resources
 
-| Resource | Name | Type |
-|----------|------|------|
-| Lambda function | `efps-spend-guard-fn` | AWS Lambda |
-| SNS topic | `efps-spend-guard-topic` | Amazon SNS |
-| Lambda execution role | `efps-spend-guard-lambda-role` | IAM Role |
-| Budgets execution role | `efps-spend-guard-budgets-role` | IAM Role |
-| IAM deny policy | `efps-spend-guard-deny-policy` | IAM Policy |
-| Daily budget | `efps-spend-guard-daily-budget` | AWS Budgets |
-| Monthly budget | `efps-spend-guard-monthly-budget` | AWS Budgets |
+| Resource | Name | Region |
+|----------|------|--------|
+| Lambda function | `efps-spend-guard-fn` | ap-south-1 |
+| SNS topic (hard stop) | `efps-spend-guard-topic` | ap-south-1 |
+| SNS topic (billing alarms) | `efps-spend-guard-billing-topic` | us-east-1 |
+| Lambda IAM role | `efps-spend-guard-lambda-role` | global |
+| Budgets IAM role | `efps-spend-guard-budgets-role` | global |
+| IAM deny policy | `efps-spend-guard-deny-policy` | global |
+| Daily budget | `efps-spend-guard-daily-budget` | us-east-1 |
+| Monthly budget | `efps-spend-guard-monthly-budget` | us-east-1 |
+| CloudWatch alarm | `efps-spend-guard-4usd-alert` | us-east-1 |
+
+---
+
+## Thresholds
+
+| Amount | What Happens |
+|--------|-------------|
+| Any spend | Logged to CloudWatch with alarm name and amount |
+| $4 | Email to zeidzakirhussain@gmail.com + hard stop all services |
 
 ---
 
 ## IAM Permissions
 
 ### efps-spend-guard-lambda-role
-Assumed by the Lambda function. Permissions defined in `iam/lambda-role-policy.json`.
+Assumed by the Lambda function. Defined in `iam/lambda-role-policy.json`.
 
 | Permission | Why |
 |------------|-----|
-| ec2:DescribeInstances, ec2:StopInstances | To find and stop running EC2 instances |
-| rds:DescribeDBInstances/Clusters, rds:StopDBInstance/Cluster | To find and stop RDS databases |
-| lambda:ListFunctions, lambda:PutFunctionConcurrency | To throttle all Lambda functions to zero |
-| logs:CreateLogGroup/Stream, logs:PutLogEvents | To write logs to CloudWatch |
+| ec2:DescribeInstances, ec2:StopInstances | Find and stop running EC2 instances |
+| rds:DescribeDBInstances/Clusters, rds:StopDBInstance/Cluster | Find and stop RDS databases |
+| lambda:ListFunctions, lambda:PutFunctionConcurrency | Throttle all Lambda functions to zero |
+| logs:CreateLogGroup/Stream, logs:PutLogEvents | Write logs to CloudWatch |
 
 ### efps-spend-guard-budgets-role
-Assumed by AWS Budgets to execute the Budget Action.
+Assumed by AWS Budgets for the Budget Action.
 
 | Permission | Why |
 |------------|-----|
-| sns:Publish | To send the trigger message to efps-spend-guard-topic |
+| sns:Publish | Send trigger to efps-spend-guard-topic |
 
 ### efps-spend-guard-deny-policy
-Applied automatically by the Budget Action when monthly spend exceeds $5.
-Blocks EC2, RDS, and Lambda from being restarted until manually detached.
+Applied by Budget Action when monthly spend exceeds $4.
+Blocks EC2, RDS, Lambda from being restarted until manually detached.
 
 ---
 
 ## Secrets
 
-This module has no secrets. It operates entirely using IAM roles — no API keys,
-no tokens, no passwords. AWS handles authentication internally.
+This module has no secrets. It uses IAM roles exclusively.
 
 Secrets Manager path reserved for future use: `efps/spend-guard/*`
 
 ---
 
-## Environment Variables
+## Logs and Debugging
 
-See `.env.example` for all variables. No secrets are stored in environment variables.
-All configuration is either hardcoded as constants in the Lambda or passed via IAM context.
+All actions logged to CloudWatch at `/aws/lambda/efps-spend-guard-fn`.
 
----
+Log line prefixes:
+- `[spend-guard]` — trigger, spend amount, and summary
+- `[EC2]` — EC2 stop actions
+- `[RDS]` — RDS stop actions
+- `[Lambda]` — Lambda throttle actions
 
-## Logs & Debugging
-
-All actions are logged to CloudWatch. To debug any issue:
-
-1. Go to AWS Console > CloudWatch > Log Groups
+To debug any issue:
+1. AWS Console > CloudWatch > Log Groups
 2. Open `/aws/lambda/efps-spend-guard-fn`
-3. Each log line is prefixed with the service it acted on:
-   - `[EC2]` — EC2 related actions
-   - `[RDS]` — RDS related actions
-   - `[Lambda]` — Lambda throttle actions
-   - `[spend-guard]` — trigger and summary logs
+3. Find the relevant invocation and read top-to-bottom
 
 ---
 
-## How to Disable / Re-enable After a Hard Stop
+## How to Re-enable Services After a Hard Stop
 
-### To re-enable services after a hard stop:
+Services will NOT restart on their own. Zeid must manually re-enable.
 
-1. Remove the IAM deny policy from the Lambda role (if Budget Action fired):
-   ```
-   AWS Console > IAM > Roles > efps-spend-guard-lambda-role > Detach efps-spend-guard-deny-policy
-   ```
+**1. Remove IAM deny policy (if Budget Action fired):**
+```
+AWS Console > IAM > Roles > efps-spend-guard-lambda-role > Detach efps-spend-guard-deny-policy
+```
 
-2. Start EC2 instances manually from the EC2 console.
+**2. Start EC2 instances:**
+```
+AWS Console > EC2 > Instances > Select > Start
+```
 
-3. Start RDS instances manually from the RDS console.
-   Note: RDS auto-restarts after 7 days even if stopped.
+**3. Start RDS instances:**
+```
+AWS Console > RDS > Databases > Select > Start
+Note: RDS auto-restarts after 7 days even if stopped.
+```
 
-4. Remove Lambda throttle (concurrency = 0) for each function:
-   ```
-   AWS Console > Lambda > {function} > Configuration > Concurrency > Remove reserved concurrency
-   ```
+**4. Remove Lambda throttle (do this for each function):**
+```
+AWS Console > Lambda > {function} > Configuration > Concurrency > Remove reserved concurrency
+```
 
-### To fully disable spend-guard:
+---
 
-Delete or disable the two budgets in AWS Budgets console. The Lambda and SNS
-will remain but will never be triggered.
+## How to Fully Disable spend-guard
+
+Delete or disable the budgets and CloudWatch alarm in AWS console.
+The Lambda and SNS topics will remain but will never be triggered.
 
 ---
 
@@ -146,10 +171,10 @@ will remain but will never be triggered.
 ```
 modules/spend-guard/
 ├── lambda/
-│   └── lambda_function.py    # Lambda source code
+│   └── lambda_function.py        # Lambda source code
 ├── iam/
-│   ├── lambda-role-policy.json   # Permissions for the Lambda execution role
+│   ├── lambda-role-policy.json   # Lambda execution role permissions
 │   └── deny-policy.json          # Deny policy applied on budget breach
-├── .env.example              # Environment variable keys (no values)
-└── README.md                 # This file
+├── .env.example                  # Environment variable keys (no values)
+└── README.md                     # This file
 ```

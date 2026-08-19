@@ -1,13 +1,16 @@
 """
 efps-spend-guard-fn
 -------------------
-Triggered by SNS when daily AWS spend exceeds $5.
-Actions:
+Triggered by SNS when AWS estimated charges reach $4.
+
+On every trigger:
+  - Logs the current spend amount from the alarm message
   - Stops all running EC2 instances
   - Stops all available RDS instances and Aurora clusters
   - Throttles all Lambda functions to 0 concurrency (except itself)
 
-All actions are logged to CloudWatch for easy debugging.
+Services remain stopped until Zeid manually re-enables them.
+All actions logged to CloudWatch: /aws/lambda/efps-spend-guard-fn
 """
 
 import boto3
@@ -23,6 +26,23 @@ THIS_FUNCTION = "efps-spend-guard-fn"
 ec2 = boto3.client("ec2", region_name=REGION)
 rds = boto3.client("rds", region_name=REGION)
 lambda_client = boto3.client("lambda", region_name=REGION)
+
+
+def extract_spend_amount(event):
+    """Pull the current estimated charge out of the SNS/CloudWatch alarm message."""
+    try:
+        sns_message = json.loads(event["Records"][0]["Sns"]["Message"])
+        # CloudWatch alarm message contains Trigger > Dimensions or NewStateReason
+        # NewStateReason has the actual value e.g. "...is currently 4.23..."
+        reason = sns_message.get("NewStateReason", "")
+        # Also grab the alarm name for context
+        alarm_name = sns_message.get("AlarmName", "unknown")
+        logger.info(f"[spend-guard] Alarm: {alarm_name}")
+        logger.info(f"[spend-guard] State reason: {reason}")
+        return reason
+    except Exception as e:
+        logger.warning(f"[spend-guard] Could not parse spend amount from event: {e}")
+        return "unknown"
 
 
 def stop_ec2_instances():
@@ -87,7 +107,11 @@ def throttle_lambda_functions():
 
 
 def lambda_handler(event, context):
-    logger.info(f"[spend-guard] Triggered. Raw event: {json.dumps(event)}")
+    logger.info("[spend-guard] Hard stop triggered.")
+
+    # Log the spend amount from the alarm — every cent tracked
+    spend_reason = extract_spend_amount(event)
+    logger.info(f"[spend-guard] Spend event: {spend_reason}")
 
     results = {
         "ec2_stopped": [],
