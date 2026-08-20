@@ -1,0 +1,80 @@
+{
+  "Comment": "Idempotent property publish workflow with retryable external steps",
+  "StartAt": "UploadImages",
+  "States": {
+    "UploadImages": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${UploadImagesArn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.upload_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PrepareFailure"}],
+      "Next": "PublishMeta"
+    },
+    "PublishMeta": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${PublishMetaArn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.meta_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PrepareFailure"}],
+      "Next": "PrepareSuccess"
+    },
+    "PrepareSuccess": {
+      "Type": "Pass",
+      "Parameters": {
+        "property_id.$": "$.property_id",
+        "catalogue_id.$": "$.meta_result.Payload.catalogue_id",
+        "image_urls.$": "$.upload_result.Payload.image_urls",
+        "finalize_status": "PUBLISHED"
+      },
+      "Next": "Finalize"
+    },
+    "PrepareFailure": {
+      "Type": "Pass",
+      "Parameters": {
+        "property_id.$": "$.property_id",
+        "error.$": "$.error",
+        "finalize_status": "FAILED"
+      },
+      "Next": "Finalize"
+    },
+    "Finalize": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FinalizePublishArn}",
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}
