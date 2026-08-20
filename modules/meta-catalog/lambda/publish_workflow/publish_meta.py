@@ -10,39 +10,24 @@ from .common import image_urls_from_state, load_job
 def _graph_api_request(
     path: str,
     access_token: str,
-    method: str = "GET",
-    params: dict[str, Any] | None = None,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
-    params = params or {}
     url = f"https://graph.facebook.com/{path}"
-    data = None
-    if method in ("POST", "DELETE"):
-        params["access_token"] = access_token
-        data = urllib.parse.urlencode(params).encode()
-        full_url = url
-    else:
-        params["access_token"] = access_token
-        full_url = f"{url}?{urllib.parse.urlencode(params)}"
-
-    request = urllib.request.Request(full_url, data=data, method=method)
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             result = json.loads(response.read().decode())
     except (urllib.error.URLError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Meta Graph API {method} request to {path} failed: {exc}") from exc
+        raise RuntimeError(f"Meta Graph API request to {path} failed: {exc}") from exc
 
     if result.get("error"):
         raise RuntimeError(f"Meta product operation failed: {result}")
     return result
-
-def _find_existing_product(catalog_id: str, retailer_id: str, token: str) -> str | None:
-    response = _graph_api_request(
-        f"{catalog_id}/products",
-        token,
-        params={"filter": json.dumps({"retailer_id": {"eq": retailer_id}})},
-    )
-    products = response.get("data", [])
-    return products[0]["id"] if products else None
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job = load_job(event)
@@ -68,30 +53,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if price in (None, ""):
         raise ValueError("Cannot publish a listing without rent")
 
-    product_data = {
-        "name": title_from_property(data),
-        "description": data.get("description", ""),
-        "price": f"{int(price)} {config.get('currency', 'INR')}",
-        "availability": "in stock",
-        "condition": "new",
-        "image_url": (image_urls_from_state(event) or [None])[0],
-        "url": data.get("url", "https://easyfindprops.com/listings"),
-        "retailer_id": job["property_id"],
+    product_payload = {
+        "access_token": access_token,
+        "item_type": "PRODUCT_ITEM",
+        "allow_upsert": True,
+        "requests": [
+            {
+                "method": "CREATE",
+                "data": {
+                    "id": job["property_id"],
+                    "title": title_from_property(data),
+                    "description": data.get("description", ""),
+                    "price": f"{int(price)} {config.get('currency', 'INR')}",
+                    "availability": "in stock",
+                    "condition": "new",
+                    "image_link": (image_urls_from_state(event) or ["https://res.cloudinary.com/demo/image/upload/sample.jpg"])[0],
+                    "link": data.get("url") or "https://easyfindprops.com/listings",
+                    "brand": "EasyFind"
+                }
+            }
+        ]
     }
-    product_data = {key: value for key, value in product_data.items() if value not in (None, "")}
     
     path_base = f"{graph_version}/"
-    existing_id = _find_existing_product(f"{path_base}{catalog_id}", job["property_id"], access_token)
-
-    if existing_id:
-        path = f"{path_base}{existing_id}"
-        result = _graph_api_request(path, access_token, "POST", product_data)
-        catalogue_id = existing_id
-    else:
-        path = f"{path_base}{catalog_id}/products"
-        result = _graph_api_request(path, access_token, "POST", product_data)
-        if not result.get("id"):
-            raise RuntimeError(f"Meta product creation failed: {result}")
-        catalogue_id = result["id"]
+    path = f"{path_base}{catalog_id}/items_batch"
+    
+    result = _graph_api_request(path, access_token, product_payload)
+    
+    # Store the first batch handle as the reference
+    handles = result.get("handles", [])
+    catalogue_id = handles[0] if handles else job["property_id"]
 
     return {**event, "catalogue_id": catalogue_id}
