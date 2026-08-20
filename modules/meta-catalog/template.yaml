@@ -1,0 +1,350 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: EFPS - Meta Catalog Slack and Whatsapp Automation (Standardized Module 02)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedPattern: "^[a-z0-9-]+$"
+  SlackSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/SLACK_BOT_TOKEN-xRwrDM"
+    Description: Secrets Manager ARN containing Slack Bot Token
+  SlackSigningSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/SLACK_SIGNING_SECRET-cUkZxa"
+    Description: Secrets Manager ARN containing Slack Signing Secret
+  GeminiSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/GEMINI_API_KEY-VZQzWr"
+  GroqSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/GROQ_API_KEY-adtJ4y"
+  OpenRouterSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/OPENROUTER_API_KEY-bT31ja"
+  MistralSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/MISTRAL_API_KEY-Xz4CoJ"
+  CloudinarySecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/CLOUDINARY_API_SECRET-ypCAUk"
+  CloudinaryCloudNameArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/CLOUDINARY_CLOUD_NAME-KdQ9lK"
+  CloudinaryApiKeyArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/CLOUDINARY_API_KEY-TBRjPt"
+  GoogleSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot-dev/google-Zmn2Fa"
+  MetaSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/WHATSAPP_TOKEN-H0ldVu"
+  MetaCatalogIdArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/WHATSAPP_CATALOGUE_ID-J2SYnL"
+  SlackChannelId:
+    Type: String
+    Default: "C07HMTRE6T9"
+  AllowedSlackUserIds:
+    Type: String
+    Default: ""
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Timeout: 90
+    MemorySize: 512
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        JOBS_TABLE_NAME: !Ref PropertyJobsTable
+        EVENTS_TABLE_NAME: !Ref ProcessedEventsTable
+        THREAD_INDEX_TABLE_NAME: !Ref ThreadIndexTable
+        SLACK_CHANNEL_ID: !Ref SlackChannelId
+        ALLOWED_SLACK_USER_IDS: !Ref AllowedSlackUserIds
+        LLM_PROVIDER_ORDER: gemini,groq,openrouter,mistral
+        LLM_ATTEMPT_TIMEOUT_SECONDS: "15"
+        LLM_TOTAL_TIMEOUT_SECONDS: "45"
+        MAX_IMAGE_BYTES: "8388608"
+        SLACK_SECRET_ID: !Ref SlackSecretArn
+        SLACK_SIGNING_SECRET_ID: !Ref SlackSigningSecretArn
+        GEMINI_SECRET_ID: !Ref GeminiSecretArn
+        GROQ_SECRET_ID: !Ref GroqSecretArn
+        OPENROUTER_SECRET_ID: !Ref OpenRouterSecretArn
+        MISTRAL_SECRET_ID: !Ref MistralSecretArn
+        CLOUDINARY_SECRET_ID: !Ref CloudinarySecretArn
+        CLOUDINARY_CLOUD_NAME_ID: !Ref CloudinaryCloudNameArn
+        CLOUDINARY_API_KEY_ID: !Ref CloudinaryApiKeyArn
+        GOOGLE_SECRET_ID: !Ref GoogleSecretArn
+        META_SECRET_ID: !Ref MetaSecretArn
+        META_CATALOG_ID: !Ref MetaCatalogIdArn
+        PROPERTY_IMAGE_BUCKET: !Ref PropertyImageBucket
+
+Resources:
+  SlackHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      CorsConfiguration:
+        AllowMethods: [POST]
+        AllowOrigins: ["https://slack.com"]
+
+  PropertyEventsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub efps-meta-catalog-${Environment}-events-dlq.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      MessageRetentionPeriod: 1209600
+
+  PropertyEventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub efps-meta-catalog-${Environment}-events.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PropertyEventsDLQ.Arn
+        maxReceiveCount: 3
+
+  PropertyJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub efps-meta-catalog-${Environment}-jobs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: property_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: property_id
+          KeyType: HASH
+
+  ProcessedEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub efps-meta-catalog-${Environment}-processed-events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  ThreadIndexTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub efps-meta-catalog-${Environment}-thread-index
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: slack_thread_ts
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slack_thread_ts
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  PropertyImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub efps-meta-catalog-${Environment}-bucket
+
+  HeavyDependencyLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub efps-meta-catalog-${Environment}-dependencies
+      Description: Core Pydantic, Google, and image library dependencies for Module 02
+      ContentUri: lambda_layer/
+      CompatibleRuntimes:
+        - python3.12
+    Metadata:
+      BuildMethod: python3.12
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: ingest_handler.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-ingest-fn
+      Timeout: 10
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt PropertyEventsQueue.Arn
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt ProcessedEventsTable.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SlackSecretArn
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub ${PropertyImageBucket.Arn}/*
+      Events:
+        SlackEvents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SlackHttpApi
+            Path: /slack/events
+            Method: POST
+        SlackInteractions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SlackHttpApi
+            Path: /slack/interactions
+            Method: POST
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: worker_handler.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-worker-fn
+      Layers:
+        - !Ref HeavyDependencyLayer
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt PropertyEventsQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PropertyJobsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ThreadIndexTable
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt ProcessedEventsTable.Arn
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref PublishStateMachine
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref SlackSecretArn
+                - !Ref GeminiSecretArn
+                - !Ref GroqSecretArn
+                - !Ref OpenRouterSecretArn
+                - !Ref MistralSecretArn
+      Events:
+        PropertyEvents:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PropertyEventsQueue.Arn
+            BatchSize: 1
+
+  UploadImagesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: publish_workflow.upload_images.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-upload-images-fn
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PropertyJobsTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref PropertyJobsTable
+        - Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${PropertyImageBucket.Arn}/*
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref SlackSecretArn
+                - !Ref SlackSigningSecretArn
+                - !Ref GeminiSecretArn
+                - !Ref GroqSecretArn
+                - !Ref OpenRouterSecretArn
+                - !Ref MistralSecretArn
+                - !Ref CloudinarySecretArn
+                - !Ref CloudinaryCloudNameArn
+                - !Ref CloudinaryApiKeyArn
+                - !Ref MetaSecretArn
+                - !Ref MetaCatalogIdArn
+
+  PublishMetaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: publish_workflow.publish_meta.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-publish-meta-fn
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PropertyJobsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref MetaSecretArn
+                - !Ref MetaCatalogIdArn
+
+  FinalizePublishFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: publish_workflow.finalize_publish.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-finalize-publish-fn
+      Layers:
+        - !Ref HeavyDependencyLayer
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PropertyJobsTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref PropertyJobsTable
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref SlackSecretArn
+                - !Ref GoogleSecretArn
+
+  TokenRefreshFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: publish_workflow.refresh_token.handler
+      FunctionName: !Sub efps-meta-catalog-${Environment}-refresh-token-fn
+      Timeout: 15
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:PutSecretValue
+              Resource: !Ref MetaSecretArn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref MetaSecretArn
+
+  PublishStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub efps-meta-catalog-${Environment}-sm
+      DefinitionUri: statemachine/publish_listing.asl.json
+      DefinitionSubstitutions:
+        UploadImagesArn: !GetAtt UploadImagesFunction.Arn
+        PublishMetaArn: !GetAtt PublishMetaFunction.Arn
+        FinalizePublishArn: !GetAtt FinalizePublishFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref UploadImagesFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PublishMetaFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FinalizePublishFunction
+
+Outputs:
+  SlackEventsUrl:
+    Description: Ingress webhook for Slack Events API subscriptions
+    Value: !Sub "https://${SlackHttpApi}.execute-api.${AWS::Region}.amazonaws.com/slack/events"
+  SlackInteractionsUrl:
+    Description: Ingress webhook for Slack Interactive Buttons and Block Kit actions
+    Value: !Sub "https://${SlackHttpApi}.execute-api.${AWS::Region}.amazonaws.com/slack/interactions"
