@@ -47,7 +47,7 @@ Parameters:
     Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/WHATSAPP_CATALOGUE_ID-J2SYnL"
   SlackChannelId:
     Type: String
-    Default: "C07HMTRE6T9"
+    Default: "C0BPUE7TMPF"
   AllowedSlackUserIds:
     Type: String
     Default: ""
