@@ -1,10 +1,28 @@
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
 _dynamodb = boto3.resource("dynamodb", region_name="ap-south-1")
+
+# The existing workflow uses CONFIRMING as the atomic publish-lock state.
+ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "PENDING_CONFIRMATION": ("AWAITING_EDIT", "CONFIRMING", "FAILED"),
+    "AWAITING_EDIT": ("PENDING_CONFIRMATION", "FAILED"),
+    "CONFIRMING": ("CONFIRMING", "PUBLISHED", "FAILED"),
+    "PUBLISHED": (),
+    "FAILED": (),
+}
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _condition_failed(exc: ClientError) -> bool:
+    return exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
 
 def jobs_table():
     return _dynamodb.Table(os.environ["JOBS_TABLE_NAME"])
@@ -92,34 +110,25 @@ def apply_edit(property_id: str, field: str, value: Any) -> dict[str, Any] | Non
     return response.get("Attributes")
 
 def lock_for_publish(property_id: str) -> bool:
-    try:
-        jobs_table().update_item(
-            Key={"property_id": property_id},
-            UpdateExpression="SET #status = :confirming, updated_at = :now",
-            ConditionExpression="#status = :pending",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":confirming": "CONFIRMING",
-                ":pending": "PENDING_CONFIRMATION",
-                ":now": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-            },
-        )
-        return True
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            return False
-        raise
+    return transition_job_status(property_id, "PENDING_CONFIRMATION", "CONFIRMING")
 
 def update_job_status(
     property_id: str,
     status: str,
     *,
+    expected_current: str | None = None,
     error: str | None = None,
     catalogue_id: str | None = None,
     image_urls: list[str] | None = None,
 ) -> None:
+    """Update a job status with an optional atomic expected-state guard."""
+    if status not in ALLOWED_TRANSITIONS:
+        raise ValueError(f"Unknown job status: {status}")
+    if expected_current is not None and status not in ALLOWED_TRANSITIONS.get(expected_current, ()):
+        raise ValueError(f"Illegal transition: {expected_current} -> {status}")
+
     names = {"#status": "status", "#updated": "updated_at"}
-    values: dict[str, Any] = {":status": status, ":updated": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()}
+    values: dict[str, Any] = {":status": status, ":updated": _utc_now()}
     expression = "SET #status = :status, #updated = :updated"
     if error is not None:
         expression += ", last_error = :error"
@@ -130,9 +139,25 @@ def update_job_status(
     if image_urls is not None:
         expression += ", image_urls = :images"
         values[":images"] = image_urls
-    jobs_table().update_item(
-        Key={"property_id": property_id},
-        UpdateExpression=expression,
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
-    )
+
+    kwargs: dict[str, Any] = {
+        "Key": {"property_id": property_id},
+        "UpdateExpression": expression,
+        "ExpressionAttributeNames": names,
+        "ExpressionAttributeValues": values,
+    }
+    if expected_current is not None:
+        kwargs["ConditionExpression"] = "attribute_exists(property_id) AND #status = :expected"
+        values[":expected"] = expected_current
+    jobs_table().update_item(**kwargs)
+
+
+def transition_job_status(property_id: str, expected_current: str, new_status: str, **attrs: Any) -> bool:
+    """Return False for a lost race; propagate all other DynamoDB failures."""
+    try:
+        update_job_status(property_id, new_status, expected_current=expected_current, **attrs)
+        return True
+    except ClientError as exc:
+        if _condition_failed(exc):
+            return False
+        raise

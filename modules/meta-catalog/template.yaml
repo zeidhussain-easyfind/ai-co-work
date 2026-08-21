@@ -17,7 +17,7 @@ Parameters:
     Description: Secrets Manager ARN containing Slack Signing Secret
   GeminiSecretArn:
     Type: String
-    Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/GEMINI_API_KEY-VZQzWr"
+    Default: "arn:aws:secretsmanager:ap-south-1:232812966882:secret:easyfind/gemini-api-key-acgorg"
   GroqSecretArn:
     Type: String
     Default: "arn:aws:secretsmanager:us-east-1:232812966882:secret:property-bot/GROQ_API_KEY-adtJ4y"
@@ -222,6 +222,12 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref ThreadIndexTable
         - Statement:
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub ${PropertyImageBucket.Arn}/*
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${PropertyImageBucket.Arn}/*
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt ProcessedEventsTable.Arn

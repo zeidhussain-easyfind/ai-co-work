@@ -61,6 +61,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         dynamo.update_job_status(
             job["property_id"],
             "PUBLISHED",
+            expected_current="CONFIRMING",
             catalogue_id=catalogue_id,
             image_urls=event.get("image_urls", []),
         )
@@ -69,7 +70,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         _write_to_sheet(job, event)
     else:
         error = error_text(event)
-        dynamo.update_job_status(job["property_id"], "FAILED", error=error)
+        dynamo.update_job_status(job["property_id"], "FAILED", expected_current="CONFIRMING", error=error)
         text = f"Publishing `{job['property_id']}` failed. Please fix the issue and retry: {error}"
         log_event("publish_failed", property_id=job["property_id"], error=error)
 

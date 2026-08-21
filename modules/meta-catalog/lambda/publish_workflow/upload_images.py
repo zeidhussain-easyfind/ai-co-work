@@ -106,6 +106,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif "res.cloudinary.com" in uri:
             output_urls.append(uri)
         
-    dynamo.update_job_status(job["property_id"], "CONFIRMING", image_urls=output_urls)
+    dynamo.update_job_status(job["property_id"], "CONFIRMING", expected_current="CONFIRMING", image_urls=output_urls)
     log_event("images_uploaded", property_id=job["property_id"], count=len(output_urls))
     return {**event, "image_urls": output_urls}

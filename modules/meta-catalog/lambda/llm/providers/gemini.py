@@ -21,7 +21,7 @@ def extract(text: str, config: dict[str, Any], timeout: float, image_urls: list[
     if not key:
         raise ProviderError("Gemini api_key is not configured")
 
-    models = config.get("models", ["gemini-1.5-flash", "gemini-1.5-pro"])
+    models = config.get("models", ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"])
     base_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
 
     # Prepare multimodal payload parts

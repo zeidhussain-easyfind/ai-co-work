@@ -4,13 +4,19 @@ from functools import lru_cache
 from typing import Any
 import boto3
 
-_sm = boto3.client("secretsmanager", region_name="us-east-1")
-
 @lru_cache(maxsize=32)
 def _get_secret_string(secret_id: str) -> str:
     if not secret_id:
         raise RuntimeError("Secrets Manager secret ID is not configured")
-    response = _sm.get_secret_value(SecretId=secret_id)
+    
+    # Dynamically route secrets manager client to the correct region based on ARN/name
+    if "us-east-1" in secret_id or "property-bot" in secret_id:
+        region = "us-east-1"
+    else:
+        region = "ap-south-1"
+        
+    sm_client = boto3.client("secretsmanager", region_name=region)
+    response = sm_client.get_secret_value(SecretId=secret_id)
     raw = response.get("SecretString")
     if raw is None:
         raise RuntimeError(f"Secret {secret_id} does not contain SecretString")
