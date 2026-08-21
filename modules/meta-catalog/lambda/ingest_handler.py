@@ -67,6 +67,7 @@ def _parse_payload(raw: str, content_type: str) -> tuple[dict[str, Any], bool]:
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         raw = _raw_body(event)
+        print("RAW EVENT RECEIVED: " + raw)
         
         try:
             content_type = header(event.get("headers"), "content-type")
@@ -140,26 +141,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         classification = classify_message(slack_event)
         if classification == "EXTRACT":
-            from s3_client import upload_slack_image_to_s3
-
-            s3_uris = []
+            # FAST PATH: Grab Slack download properties without S3 uploading (done by Worker)
+            slack_files = []
             files = slack_event.get("files") or []
-            bucket = os.environ["PROPERTY_IMAGE_BUCKET"]
-            token = credentials.get("bot_token", "")
-            thread_ts = slack_event.get("ts")
-            for i, file in enumerate(files):
+            for file in files:
                 if file.get("mimetype", "").startswith("image/") and file.get("url_private_download"):
-                    try:
-                        uri = upload_slack_image_to_s3(
-                            slack_url=file["url_private_download"],
-                            slack_token=token,
-                            bucket=bucket,
-                            thread_ts=thread_ts,
-                            file_name=file.get("name", f"image_{i}"),
-                        )
-                        s3_uris.append(uri)
-                    except Exception as exc:
-                        log_event("s3_upload_failed", error=str(exc), file_url=file["url_private_download"])
+                    slack_files.append({
+                        "url": file["url_private_download"],
+                        "name": file.get("name", "image"),
+                        "mimetype": file.get("mimetype", "image/jpeg")
+                    })
 
             message_text = slack_event.get("text", "")
             attachments = slack_event.get("attachments") or []
@@ -181,10 +172,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "channel": slack_event.get("channel"),
                     "user": slack_event.get("user"),
                     "text": message_text,
-                    "thread_ts": thread_ts,
-                    "image_urls": s3_uris,
+                    "thread_ts": slack_event.get("ts"),
+                    "slack_files": slack_files,
                 },
-                group_id=thread_ts,
+                group_id=slack_event.get("ts"),
             )
         elif classification == "EDIT_OR_THREAD_REPLY":
             _enqueue(

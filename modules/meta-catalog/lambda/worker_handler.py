@@ -27,8 +27,28 @@ def _post(channel: str | None, text: str, *, thread_ts: str | None = None, block
     post_message(_slack_token(), channel, text, thread_ts=thread_ts, blocks=blocks)
 
 def _extract(message: dict[str, Any]) -> None:
-    # PASS S3 image_urls TO ENABLE HIGH-PRECISION MULTIMODAL EXTRACTION
-    data = extract_property(message["text"], image_urls=message.get("image_urls"))
+    # 1. Asynchronously download images from Slack and upload to S3 in the background worker
+    s3_uris = []
+    slack_files = message.get("slack_files") or []
+    if slack_files:
+        from s3_client import upload_slack_image_to_s3
+        bucket = os.environ["PROPERTY_IMAGE_BUCKET"]
+        token = _slack_token()
+        for file in slack_files:
+            try:
+                uri = upload_slack_image_to_s3(
+                    slack_url=file["url"],
+                    slack_token=token,
+                    bucket=bucket,
+                    thread_ts=message["thread_ts"],
+                    file_name=file["name"],
+                )
+                s3_uris.append(uri)
+            except Exception as exc:
+                log_event("worker_s3_upload_failed", error=str(exc))
+
+    # 2. Execute Multimodal Gemini extraction using S3 images and raw text
+    data = extract_property(message["text"], image_urls=s3_uris)
     property_id = generate_property_id()
     now = datetime.now(timezone.utc).isoformat()
     job = {
@@ -39,7 +59,7 @@ def _extract(message: dict[str, Any]) -> None:
         "slack_user": message.get("user"),
         "edit_field": None,
         "property_data": data,
-        "image_urls": message.get("image_urls") or data.get("image_urls", []),
+        "image_urls": s3_uris,
         "version": 1,
         "created_at": now,
         "updated_at": now,
