@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Any
 import boto3
 
-_sm = boto3.client("secretsmanager", region_name="ap-south-1")
+_sm = boto3.client("secretsmanager", region_name="us-east-1")
 
 @lru_cache(maxsize=32)
 def _get_secret_string(secret_id: str) -> str:

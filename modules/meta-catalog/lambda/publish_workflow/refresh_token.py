@@ -8,7 +8,7 @@ import boto3
 from logging_utils import log_event
 from aws_secrets import get_secret
 
-_secretsmanager = boto3.client("secretsmanager", region_name="ap-south-1")
+_secretsmanager = boto3.client("secretsmanager", region_name="us-east-1")
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     secret_id = os.environ.get("META_SECRET_ID")
