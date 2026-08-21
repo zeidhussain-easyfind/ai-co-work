@@ -179,6 +179,7 @@ Resources:
       FunctionName: !Sub efps-meta-catalog-${Environment}-ingest-fn
       Timeout: 10
       Policies:
+        - AWSLambdaBasicExecutionRole
         - Statement:
             - Effect: Allow
               Action: sqs:SendMessage
@@ -215,6 +216,7 @@ Resources:
       Layers:
         - !Ref HeavyDependencyLayer
       Policies:
+        - AWSLambdaBasicExecutionRole
         - SQSPollerPolicy:
             QueueName: !GetAtt PropertyEventsQueue.QueueName
         - DynamoDBCrudPolicy:
@@ -250,6 +252,7 @@ Resources:
       Handler: publish_workflow.upload_images.handler
       FunctionName: !Sub efps-meta-catalog-${Environment}-upload-images-fn
       Policies:
+        - AWSLambdaBasicExecutionRole
         - DynamoDBReadPolicy:
             TableName: !Ref PropertyJobsTable
         - DynamoDBWritePolicy:
@@ -280,6 +283,7 @@ Resources:
       Handler: publish_workflow.publish_meta.handler
       FunctionName: !Sub efps-meta-catalog-${Environment}-publish-meta-fn
       Policies:
+        - AWSLambdaBasicExecutionRole
         - DynamoDBReadPolicy:
             TableName: !Ref PropertyJobsTable
         - Statement:
@@ -298,6 +302,7 @@ Resources:
       Layers:
         - !Ref HeavyDependencyLayer
       Policies:
+        - AWSLambdaBasicExecutionRole
         - DynamoDBReadPolicy:
             TableName: !Ref PropertyJobsTable
         - DynamoDBWritePolicy:
@@ -317,6 +322,7 @@ Resources:
       FunctionName: !Sub efps-meta-catalog-${Environment}-refresh-token-fn
       Timeout: 15
       Policies:
+        - AWSLambdaBasicExecutionRole
         - Statement:
             - Effect: Allow
               Action: secretsmanager:PutSecretValue
