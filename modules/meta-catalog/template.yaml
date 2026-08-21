@@ -168,8 +168,6 @@ Resources:
       ContentUri: lambda_layer/
       CompatibleRuntimes:
         - python3.12
-    Metadata:
-      BuildMethod: python3.12
 
   IngestFunction:
     Type: AWS::Serverless::Function
