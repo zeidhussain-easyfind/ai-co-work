@@ -83,6 +83,7 @@ Globals:
         META_SECRET_ID: !Ref MetaSecretArn
         META_CATALOG_ID: !Ref MetaCatalogIdArn
         PROPERTY_IMAGE_BUCKET: !Ref PropertyImageBucket
+        EVENT_QUEUE_URL: !Ref PropertyEventsQueue
 
 Resources:
   SlackHttpApi:
